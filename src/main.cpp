@@ -9,25 +9,49 @@
 #include "Unit.h"
 #include "Vector.h"
 #include "Relay.h"
+#include <Adafruit_Sensor.h>
+#include <DHT.h>
+#include <DHT_U.h>
+
+
+
+#define DHTPIN 4 
+#define DHTTYPE DHT11 
+const int gasSensorPin = 34; 
+const int flameSensorPin = 16 ;
+DHT_Unified dht(DHTPIN, DHTTYPE);
+sensors_event_t event;
 
 JsonDocument doc;
 const char *ssidAP = "P424-2";
 const char *passwordAP = "0947900523";
 const char *BASE_URL = "http://157.10.52.61:3000";
+const char* serverName = "http://157.10.52.61:3000/device/";
 HTTPClient http;
 
+void ensureWifiConnected();
 void connectToWifi();
 void fetchDataDevices();
 void updateDevice(Device *device);
-void initRelay();
 void initDevice(Vector<Device *> devicesData);
+void sendPatchRequest(int id, float value);
+void sendStatus(int id, bool status);
+struct SensorData {
+  float temperature;
+  float humidity;
+  int gasLevel;
+  bool flameDetected;
+};
+SensorData senSorData();
 
 void setup()
 {
   Serial.begin(115200);
   connectToWifi();
   fetchDataDevices();
-  initRelay();
+  dht.begin();
+  pinMode(gasSensorPin, INPUT);
+  pinMode(flameSensorPin, INPUT);
 }
 
 void connectToWifi()
@@ -43,16 +67,35 @@ void connectToWifi()
   Serial.println("Connected to the WiFi network");
 }
 
+void ensureWifiConnected() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi disconnected, trying to reconnect...");
+    connectToWifi();
+  }
+}
+
 void loop()
 {
   static unsigned long lastFetchTime = 0;
   unsigned long currentTime = millis();
 
+
+  void ensureWifiConnected();
   // Fetch data every 3 seconds
   if (currentTime - lastFetchTime >= 3000)
   {
     fetchDataDevices();
     lastFetchTime = currentTime;
+    int idTemp = 11;
+    int idHum = 21;
+    int idGas = 12;
+    int idFlame = 25;
+
+    SensorData data = senSorData();
+    sendPatchRequest(idTemp, data.temperature);
+    sendPatchRequest(idHum, data.humidity);
+    sendPatchRequest(idGas, data.gasLevel);
+    sendStatus(idFlame, data.flameDetected);
   }
 }
 
@@ -118,6 +161,96 @@ void updateDevice(Device *device)
   Serial.println("Updating device..");
 }
 
-void initRelay()
-{
+SensorData senSorData() {
+  SensorData data;
+  sensors_event_t event;
+
+  dht.temperature().getEvent(&event);
+  if (isnan(event.temperature)) {
+    Serial.println("Error reading temperature!");
+    data.temperature = NAN;
+  } else {
+    data.temperature = event.temperature;
+    Serial.print("Temperature: ");
+    Serial.print(data.temperature);
+    Serial.println("°C");
+  }
+
+  dht.humidity().getEvent(&event);
+  if (isnan(event.relative_humidity)) {
+    Serial.println("Error reading humidity!");
+    data.humidity = NAN;
+  } else {
+    data.humidity = event.relative_humidity;
+    Serial.print("Humidity: ");
+    Serial.print(data.humidity);
+    Serial.println("%");
+  }
+  data.gasLevel = analogRead(gasSensorPin);
+  Serial.print("Gas level: ");
+  if (data.gasLevel<670){
+    data.gasLevel = 0;
+  }
+  Serial.println(data.gasLevel);
+
+  data.flameDetected = digitalRead(flameSensorPin) == LOW; 
+  Serial.print("Flame detected: ");
+  Serial.println(data.flameDetected ? "true" : "false");
+
+  return data;
 }
+
+void sendPatchRequest(int id, float value ) {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    
+    String serverPath = String(serverName) + String(id);
+
+    http.begin(serverPath.c_str());
+    http.addHeader("Content-Type", "application/json");
+
+    String jsonPayload = "{\"value\": " + String(value) + "}";
+
+    int httpResponseCode = http.PATCH(jsonPayload);
+
+    if (httpResponseCode > 0) {
+      String response = http.getString();
+      Serial.println("HTTP Response code: " + String(httpResponseCode));
+      Serial.println("Response: " + response);
+    } else {
+      Serial.println("Error on sending PATCH request: " + String(httpResponseCode));
+    }
+
+    http.end();
+  } else {
+    Serial.println("WiFi Disconnected");
+  }
+}
+ void sendStatus(int id, bool status) {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    
+    String serverPath = String(serverName) + String(id);
+
+    http.begin(serverPath.c_str());
+    http.addHeader("Content-Type", "application/json");
+
+   
+    String statusString = status ? "true" : "false";
+    String jsonPayload = "{\"status\":" + statusString + "}";
+
+    int httpResponseCode = http.PATCH(jsonPayload);
+
+    if (httpResponseCode > 0) {
+      String response = http.getString();
+      Serial.println("HTTP Response code: " + String(httpResponseCode));
+      Serial.println("Response: " + response);
+    } else {
+      Serial.println("Error on sending PATCH request: " + String(httpResponseCode));
+    }
+    http.end();
+  } else {
+    Serial.println("WiFi Disconnected");
+  }
+}
+
