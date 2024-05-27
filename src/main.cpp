@@ -13,12 +13,10 @@
 #include <DHT.h>
 #include <DHT_U.h>
 
-
-
-#define DHTPIN 4 
-#define DHTTYPE DHT11 
-const int gasSensorPin = 34; 
-const int flameSensorPin = 16 ;
+#define DHTPIN 4
+#define DHTTYPE DHT11
+const int gasSensorPin = 34;
+const int flameSensorPin = 16;
 DHT_Unified dht(DHTPIN, DHTTYPE);
 sensors_event_t event;
 
@@ -26,7 +24,7 @@ JsonDocument doc;
 const char *ssidAP = "P424-2";
 const char *passwordAP = "0947900523";
 const char *BASE_URL = "http://157.10.52.61:3000";
-const char* serverName = "http://157.10.52.61:3000/device/";
+const char *serverName = "http://157.10.52.61:3000/device/";
 HTTPClient http;
 
 void ensureWifiConnected();
@@ -36,14 +34,15 @@ void updateDevice(Device *device);
 void initDevice(Vector<Device *> devicesData);
 void sendPatchRequest(int id, float value);
 void sendStatus(int id, bool status);
-struct SensorData {
+struct SensorData
+{
   float temperature;
   float humidity;
   int gasLevel;
   bool flameDetected;
 };
 SensorData senSorData();
-
+int processGasValue(int rawValue);
 void setup()
 {
   Serial.begin(115200);
@@ -67,8 +66,10 @@ void connectToWifi()
   Serial.println("Connected to the WiFi network");
 }
 
-void ensureWifiConnected() {
-  if (WiFi.status() != WL_CONNECTED) {
+void ensureWifiConnected()
+{
+  if (WiFi.status() != WL_CONNECTED)
+  {
     Serial.println("WiFi disconnected, trying to reconnect...");
     connectToWifi();
   }
@@ -79,10 +80,10 @@ void loop()
   static unsigned long lastFetchTime = 0;
   unsigned long currentTime = millis();
 
+  ensureWifiConnected();
 
-  void ensureWifiConnected();
   // Fetch data every 3 seconds
-  if (currentTime - lastFetchTime >= 3000)
+  if (currentTime - lastFetchTime >= 2000)
   {
     fetchDataDevices();
     lastFetchTime = currentTime;
@@ -95,6 +96,7 @@ void loop()
     sendPatchRequest(idTemp, data.temperature);
     sendPatchRequest(idHum, data.humidity);
     sendPatchRequest(idGas, data.gasLevel);
+     sendStatus(idGas, data.gasLevel > 400); 
     sendStatus(idFlame, data.flameDetected);
   }
 }
@@ -108,6 +110,7 @@ void fetchDataDevices()
   Serial.println(String(BASE_URL) + "/device");
   int httpCode = http.GET();
   Serial.println(httpCode);
+  http.setTimeout(1000);
   if (httpCode == 200)
   {
     String payload = http.getString();
@@ -161,15 +164,19 @@ void updateDevice(Device *device)
   Serial.println("Updating device..");
 }
 
-SensorData senSorData() {
+SensorData senSorData()
+{
   SensorData data;
   sensors_event_t event;
 
   dht.temperature().getEvent(&event);
-  if (isnan(event.temperature)) {
+  if (isnan(event.temperature))
+  {
     Serial.println("Error reading temperature!");
     data.temperature = NAN;
-  } else {
+  }
+  else
+  {
     data.temperature = event.temperature;
     Serial.print("Temperature: ");
     Serial.print(data.temperature);
@@ -177,80 +184,100 @@ SensorData senSorData() {
   }
 
   dht.humidity().getEvent(&event);
-  if (isnan(event.relative_humidity)) {
+  if (isnan(event.relative_humidity))
+  {
     Serial.println("Error reading humidity!");
     data.humidity = NAN;
-  } else {
+  }
+  else
+  {
     data.humidity = event.relative_humidity;
     Serial.print("Humidity: ");
     Serial.print(data.humidity);
     Serial.println("%");
   }
-  data.gasLevel = analogRead(gasSensorPin);
-  Serial.print("Gas level: ");
-  if (data.gasLevel<670){
-    data.gasLevel = 0;
-  }
-  Serial.println(data.gasLevel);
+  int rawGasLevel = analogRead(gasSensorPin);
+    data.gasLevel = processGasValue(rawGasLevel);
+    Serial.print("Gas level (raw): ");
+    Serial.println(rawGasLevel);
+    Serial.print("Gas level (processed): ");
+    Serial.println(data.gasLevel);
 
-  data.flameDetected = digitalRead(flameSensorPin) == LOW; 
+  data.flameDetected = digitalRead(flameSensorPin) == LOW;
   Serial.print("Flame detected: ");
   Serial.println(data.flameDetected ? "true" : "false");
 
   return data;
 }
 
-void sendPatchRequest(int id, float value ) {
-  if (WiFi.status() == WL_CONNECTED) {
-    HTTPClient http;
-    
-    String serverPath = String(serverName) + String(id);
+int processGasValue(int rawValue) {
+    const int BASELINE = 651;
+    int processedValue = rawValue - BASELINE;
+    return processedValue > 0 ? processedValue : 0;
+}
 
+void sendPatchRequest(int id, float value)
+{
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    HTTPClient http;
+
+    String serverPath = String(serverName) + String(id);
     http.begin(serverPath.c_str());
+    http.setTimeout(2000); 
     http.addHeader("Content-Type", "application/json");
 
     String jsonPayload = "{\"value\": " + String(value) + "}";
 
     int httpResponseCode = http.PATCH(jsonPayload);
 
-    if (httpResponseCode > 0) {
+    if (httpResponseCode > 0)
+    {
       String response = http.getString();
       Serial.println("HTTP Response code: " + String(httpResponseCode));
       Serial.println("Response: " + response);
-    } else {
+    }
+    else
+    {
       Serial.println("Error on sending PATCH request: " + String(httpResponseCode));
     }
 
     http.end();
-  } else {
+  }
+  else
+  {
     Serial.println("WiFi Disconnected");
   }
 }
- void sendStatus(int id, bool status) {
-  if (WiFi.status() == WL_CONNECTED) {
-    HTTPClient http;
-    
-    String serverPath = String(serverName) + String(id);
 
+void sendStatus(int id, bool status)
+{
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    HTTPClient http;
+
+    String serverPath = String(serverName) + String(id);
     http.begin(serverPath.c_str());
     http.addHeader("Content-Type", "application/json");
-
-   
     String statusString = status ? "true" : "false";
     String jsonPayload = "{\"status\":" + statusString + "}";
 
     int httpResponseCode = http.PATCH(jsonPayload);
 
-    if (httpResponseCode > 0) {
+    if (httpResponseCode > 0)
+    {
       String response = http.getString();
       Serial.println("HTTP Response code: " + String(httpResponseCode));
       Serial.println("Response: " + response);
-    } else {
+    }
+    else
+    {
       Serial.println("Error on sending PATCH request: " + String(httpResponseCode));
     }
     http.end();
-  } else {
+  }
+  else
+  {
     Serial.println("WiFi Disconnected");
   }
 }
-
